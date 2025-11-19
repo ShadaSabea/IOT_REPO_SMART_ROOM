@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Miscellaneous
 *.class
 *.log
@@ -43,3 +44,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+=======
+ESP32/SECRETS.h
+>>>>>>> d372d540fd95b63328e3cf12d122b32ca06c8c4a
