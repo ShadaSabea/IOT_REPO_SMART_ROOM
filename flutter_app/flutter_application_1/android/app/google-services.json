@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "843690350962",
+    "project_id": "smartroom-5969a",
+    "storage_bucket": "smartroom-5969a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:843690350962:android:ddebe796be74e3150665eb",
+        "android_client_info": {
+          "package_name": "com.iot.technion.smartroom"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyABj8AIV5maS4q6GctVd27cTtnTGJ0D-30"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
