@@ -35,6 +35,7 @@ class HomePage extends StatelessWidget {
               final name = room['name'];
               final capacity = room['capacity'];
               final location = room['location'];
+              final status = room['status'] ?? 'free';
 
               return GestureDetector(
                 onTap: () {
@@ -102,6 +103,10 @@ class HomePage extends StatelessWidget {
                                 "Location: $location",
                                 style: const TextStyle(fontSize: 14),
                               ),
+                              Text(
+  "Status: $status",
+  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+),
                             ],
                           ),
                         ),

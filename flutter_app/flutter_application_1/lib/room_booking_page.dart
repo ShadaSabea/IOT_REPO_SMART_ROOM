@@ -32,51 +32,68 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
     {"slot": 5, "start": "16:00", "end": "18:00"},
     {"slot": 6, "start": "18:00", "end": "20:00"},
   ];
+Future<void> _createBooking({
+  required int slot,
+  required String start,
+  required String end,
+  required String date,
+}) async {
+  final user = FirebaseAuth.instance.currentUser;
 
-  Future<void> _createBooking({
-    required int slot,
-    required String start,
-    required String end,
-    required String date,
-  }) async {
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please log in first")),
-      );
-      return;
-    }
-
-    // Time → minutes from midnight
-    final startHour = int.parse(start.split(":")[0]);
-    final startMin = int.parse(start.split(":")[1]);
-    final endHour = int.parse(end.split(":")[0]);
-    final endMin = int.parse(end.split(":")[1]);
-
-    final int startMinutes = startHour * 60 + startMin;
-    final int endMinutes = endHour * 60 + endMin;
-
-    // Simple 4-digit PIN
-    String pin =
-        (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
-
-    await FirebaseFirestore.instance.collection("bookings").add({
-      "roomId": widget.roomId,
-      "userId": user.uid,
-      "date": date,
-      "slot": slot,
-      "startTime": startMinutes,
-      "endTime": endMinutes,
-      "pin": pin,
-      "qrData": "", // placeholder for later
-      "createdAt": FieldValue.serverTimestamp(),
-    });
-
+  if (user == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Booking successful! Your PIN: $pin")),
+      const SnackBar(content: Text("Please log in first")),
     );
+    return;
   }
+
+  // Time → minutes from midnight
+  final startHour = int.parse(start.split(":")[0]);
+  final startMin = int.parse(start.split(":")[1]);
+  final endHour = int.parse(end.split(":")[0]);
+  final endMin = int.parse(end.split(":")[1]);
+
+  final int startMinutes = startHour * 60 + startMin;
+  final int endMinutes = endHour * 60 + endMin;
+
+  // Simple 4-digit PIN
+  String pin = (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
+
+  // ⿡ Create booking FIRST (temporary qrData)
+  final docRef = await FirebaseFirestore.instance.collection("bookings").add({
+    "roomId": widget.roomId,
+    "userId": user.uid,
+    "date": date,
+    "slot": slot,
+    "startTime": startMinutes,
+    "endTime": endMinutes,
+    "pin": pin,
+
+    // ⭐ REQUIRED FOR OUR PROJECT:
+    "qrData": "",              // will update after we get the ID
+    "status": "upcoming",      // upcoming until time reaches start
+    "isCheckedIn": false,      // user has not checked in yet
+
+    "createdAt": FieldValue.serverTimestamp(),
+  });
+
+  // ⿢ Build the QR payload NOW (room + resId + date + startTime)
+  String qrPayload =
+      "roomId=${widget.roomId};resId=${docRef.id};date=$date;start=$startMinutes";
+
+  // ⿣ Update booking with qrData
+  await docRef.update({"qrData": qrPayload});
+
+  // ⿤ Update ROOM status so ESP32 knows there is an upcoming reservation
+  await FirebaseFirestore.instance.collection("rooms").doc(widget.roomId).update({
+    "status": "upcoming",
+    "currentReservationId": docRef.id,
+  });
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text("Booking successful! Your PIN: $pin")),
+);
+}
 
   @override
   Widget build(BuildContext context) {

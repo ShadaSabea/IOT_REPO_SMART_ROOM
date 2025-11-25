@@ -7,6 +7,7 @@ import 'signup_page.dart';
 import 'home_page.dart';
 import 'my_reservations_page.dart';   // NEW
 import 'main_screen.dart';            // NEW
+import 'qrscanner.dart';              // NEW
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +43,7 @@ class MyApp extends StatelessWidget {
 
         // OLD home replaced by MainScreen
         '/home': (context) => const MainScreen(),
+        '/qrscanner': (context) => const QRScannerPage(), // NEW
       },
     );
   }

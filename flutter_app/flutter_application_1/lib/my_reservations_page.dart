@@ -7,6 +7,7 @@ class MyReservationsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
@@ -20,6 +21,45 @@ class MyReservationsPage extends StatelessWidget {
         title: const Text("My Reservations"),
         centerTitle: true,
       ),
+      /*
+      floatingActionButton: FloatingActionButton(
+  backgroundColor: Colors.deepPurple,
+  onPressed: () {
+    Navigator.pushNamed(context, "/qrscanner");
+  },
+  child: const Icon(Icons.qr_code_scanner, size: 28, color: Colors.white),
+),*/
+floatingActionButton: Column(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    // REAL QR scanner button
+    FloatingActionButton(
+      heroTag: "qr",
+      backgroundColor: Colors.deepPurple,
+      onPressed: () async {
+        final qrData = await Navigator.pushNamed(context, "/qrscanner");
+        if (qrData == null) return;
+        _processQR(context, qrData.toString());
+      },
+      child: const Icon(Icons.qr_code_scanner, size: 28, color: Colors.white),
+    ),
+
+    const SizedBox(height: 12),
+
+    // TEST button (fake QR)
+    FloatingActionButton(
+      heroTag: "test",
+      backgroundColor: Colors.orange,
+      onPressed: () {
+        _processQR(
+          context,
+          "roomId=7vrgmE2jIOoDl3UO5fSI;resId=csUdBuYt7kPwNVMv86wy;date=2025-11-25;start=840",
+        );
+      },
+      child: const Icon(Icons.bug_report, size: 28, color: Colors.white),
+),
+],
+),
 
       // 1) First, load all rooms to map roomId -> roomName
       body: FutureBuilder<QuerySnapshot>(
@@ -34,6 +74,7 @@ class MyReservationsPage extends StatelessWidget {
           if (roomsSnap.hasData) {
             for (var doc in roomsSnap.data!.docs) {
               final data = doc.data() as Map<String, dynamic>;
+              final status = data['status'] ?? 'upcoming';
               roomNames[doc.id] = (data['name'] ?? 'Unknown room').toString();
             }
           }
@@ -110,6 +151,7 @@ class MyReservationsPage extends StatelessWidget {
                   final pin = data["pin"]?.toString() ?? "----";
                   final startMinutes = (data["startTime"] ?? 0) as int;
                   final endMinutes = (data["endTime"] ?? 0) as int;
+                  final status = (data["status"] ?? 'upcoming').toString();
 
                   final timeRange =
                       "${_formatTime(startMinutes)} - ${_formatTime(endMinutes)}";
@@ -135,6 +177,7 @@ class MyReservationsPage extends StatelessWidget {
                         const SizedBox(height: 6),
                         Text("Date: $date"),
                         Text("Time: $timeRange"),
+                        Text("Status: $status"),
                         const SizedBox(height: 6),
                         Text(
                           "PIN: $pin",
@@ -156,6 +199,98 @@ class MyReservationsPage extends StatelessWidget {
     );
   }
 
+
+
+Future<void> _processQR(BuildContext context, String qr) async {
+  try {
+    final parts = qr.split(";");
+    Map<String, String> data = {};
+
+    // Decode QR payload
+    for (var p in parts) {
+      final kv = p.split("=");
+      if (kv.length == 2) {
+        data[kv[0]] = kv[1];
+      }
+    }
+
+    final roomId = data["roomId"];
+    final resId = data["resId"];
+    final date = data["date"];
+    final startStr = data["start"];
+
+    if (roomId == null || resId == null || date == null || startStr == null) {
+      throw Exception("Invalid QR format.");
+    }
+
+    // Fetch booking
+    final bookingSnap = await FirebaseFirestore.instance
+        .collection("bookings")
+        .doc(resId)
+        .get();
+
+    if (!bookingSnap.exists) {
+      throw Exception("Reservation not found.");
+    }
+
+    final booking = bookingSnap.data()!;
+    final user = FirebaseAuth.instance.currentUser;
+
+    // Validate owner
+    if (booking["userId"] != user!.uid) {
+      throw Exception("This reservation does NOT belong to you.");
+    }
+
+    // Read system time
+    final systemSnap = await FirebaseFirestore.instance
+        .collection("system")
+        .doc("time")
+        .get();
+
+    final systemDate = systemSnap["date"];
+    final systemTime = systemSnap["currentTime"]; // "14:01"
+
+    if (systemDate != date) {
+      throw Exception("Wrong day. Cannot check in.");
+    }
+
+    // Convert system time to minutes
+    final hhmm = systemTime.split(":");
+    final nowMin = int.parse(hhmm[0]) * 60 + int.parse(hhmm[1]);
+    final startMin = int.parse(startStr);
+
+    // Check-in window = start ... start+5 minutes
+    if (nowMin < startMin) {
+      throw Exception("Too early for check-in.");
+    }
+    if (nowMin > startMin + 5) {
+      throw Exception("Reservation expired (no-show).");
+    }
+
+    // Update booking → active
+    await bookingSnap.reference.update({
+      "status": "active",
+      "isCheckedIn": true,
+    });
+
+    // Update room → occupied
+    await FirebaseFirestore.instance
+        .collection("rooms")
+        .doc(roomId)
+        .update({
+      "status": "occupied",
+      "currentReservationId": resId,
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Check-in successful!")),
+    );
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Error: $e")),
+);
+}
+}
   static String _formatTime(int minutes) {
     final h = (minutes ~/ 60).toString().padLeft(2, '0');
     final m = (minutes % 60).toString().padLeft(2, '0');
