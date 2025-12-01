@@ -32,6 +32,7 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
     {"slot": 5, "start": "16:00", "end": "18:00"},
     {"slot": 6, "start": "18:00", "end": "20:00"},
   ];
+
 Future<void> _createBooking({
   required int slot,
   required String start,
@@ -56,11 +57,45 @@ Future<void> _createBooking({
   final int startMinutes = startHour * 60 + startMin;
   final int endMinutes = endHour * 60 + endMin;
 
+  // 🔹 NEW: compute windowStartMinutes based on /system/time
+  int windowStartMinutes = startMinutes;
+  try {
+    final systemSnap = await FirebaseFirestore.instance
+        .collection('system')
+        .doc('time')
+        .get();
+
+    final data = systemSnap.data() as Map<String, dynamic>?;
+    final String? systemDate = data?['date'] as String?;
+    final String? systemTime = data?['currentTime'] as String?;
+
+    if (systemDate == date && systemTime != null) {
+      final parts = systemTime.split(':');
+      if (parts.length == 2) {
+        final sysMinutes =
+            int.parse(parts[0]) * 60 + int.parse(parts[1]);
+
+        // If user books after slot started → give them 10 minutes from NOW
+        if (sysMinutes > startMinutes) {
+          windowStartMinutes = sysMinutes;
+        }
+      }
+    } else {
+      // booking for future date → window starts at slot start
+      windowStartMinutes = startMinutes;
+    }
+  } catch (_) {
+    // if anything fails, fall back to slot start
+    windowStartMinutes = startMinutes;
+  }
+
   // Simple 4-digit PIN
-  String pin = (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
+  String pin =
+      (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
 
   // ⿡ Create booking FIRST (temporary qrData)
-  final docRef = await FirebaseFirestore.instance.collection("bookings").add({
+  final docRef =
+      await FirebaseFirestore.instance.collection("bookings").add({
     "roomId": widget.roomId,
     "userId": user.uid,
     "date": date,
@@ -69,12 +104,15 @@ Future<void> _createBooking({
     "endTime": endMinutes,
     "pin": pin,
 
-    // ⭐ REQUIRED FOR OUR PROJECT:
-    "qrData": "",              // will update after we get the ID
-    "status": "upcoming",      // upcoming until time reaches start
-    "isCheckedIn": false,      // user has not checked in yet
+    // ⭐ NEW FIELD:
+    "windowStartMinutes": windowStartMinutes,
 
-    "createdAt": FieldValue.serverTimestamp(),
+    // ⭐ REQUIRED FOR OUR PROJECT:
+    "qrData": "", // will update after we get the ID
+    "status": "upcoming",
+    "isCheckedIn": false,
+
+    "createdAt": FieldValue.serverTimestamp(), // keep just for info
   });
 
   // ⿢ Build the QR payload NOW (room + resId + date + startTime)
@@ -85,15 +123,102 @@ Future<void> _createBooking({
   await docRef.update({"qrData": qrPayload});
 
   // ⿤ Update ROOM status so ESP32 knows there is an upcoming reservation
-  await FirebaseFirestore.instance.collection("rooms").doc(widget.roomId).update({
+  await FirebaseFirestore.instance
+      .collection("rooms")
+      .doc(widget.roomId)
+      .update({
     "status": "upcoming",
     "currentReservationId": docRef.id,
   });
 
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text("Booking successful! Your PIN: $pin")),
-);
+    SnackBar(content: Text("Booking successful! Your PIN: $pin")),
+  );
 }
+
+
+  /// 🔁 Auto-expire a single booking of THIS room based on /system/time,
+  /// using dynamic windowStart = max(startTime, createdAt).
+Future<void> _autoExpireBookingForDoc(DocumentSnapshot bookingDoc) async {
+  final data = bookingDoc.data() as Map<String, dynamic>;
+
+  final String? date = data['date'] as String?;
+  final int? startMinutes = data['startTime'] as int?;
+  final String status = (data['status'] ?? 'upcoming').toString();
+  final bool isCheckedIn = data['isCheckedIn'] == true;
+
+  // Only care about upcoming, not-yet-checked-in reservations
+  if (date == null || startMinutes == null) return;
+  if (status != 'upcoming' || isCheckedIn) return;
+
+  // 🚨 NEW: if createdAt not ready yet, skip auto-expire
+  final createdAtTs = data['createdAt'];
+  if (createdAtTs == null || createdAtTs is! Timestamp) {
+    return;
+  }
+
+  // Read system time
+  final systemSnap = await FirebaseFirestore.instance
+      .collection('system')
+      .doc('time')
+      .get();
+
+  final systemDate = systemSnap['date'];
+  final String? systemTime = systemSnap['currentTime'];
+  if (systemTime == null) return;
+  if (systemDate != date) return;
+
+  final parts = systemTime.split(':');
+  if (parts.length != 2) return;
+  final nowMinutes =
+      int.parse(parts[0]) * 60 + int.parse(parts[1]);
+
+  // 🕒 Dynamic windowStart = max(startTime, createdAt)
+  int windowStart = startMinutes;
+
+  final createdAt = createdAtTs.toDate();
+  final bookingDate = DateTime.parse(date);
+  final sameDay = createdAt.year == bookingDate.year &&
+      createdAt.month == bookingDate.month &&
+      createdAt.day == bookingDate.day;
+
+  if (sameDay) {
+    final createdMinutes = createdAt.hour * 60 + createdAt.minute;
+    if (createdMinutes > startMinutes) {
+      windowStart = createdMinutes;
+    }
+  }
+
+  const int checkInWindowMinutes = 10;
+
+  if (nowMinutes > windowStart + checkInWindowMinutes) {
+    // 🔴 Expire booking
+    await bookingDoc.reference.update({
+      'status': 'expired',
+      'isCheckedIn': false,
+    });
+
+    // Free the room if it points to this reservation
+    final roomSnap = await FirebaseFirestore.instance
+        .collection('rooms')
+        .doc(widget.roomId)
+        .get();
+
+    if (roomSnap.exists) {
+      final roomData =
+          roomSnap.data() as Map<String, dynamic>;
+      final String? currentRes =
+          roomData['currentReservationId'] as String?;
+      if (currentRes == bookingDoc.id) {
+        await roomSnap.reference.update({
+          'status': 'free',
+          'currentReservationId': FieldValue.delete(),
+        });
+      }
+    }
+  }
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -119,111 +244,135 @@ Future<void> _createBooking({
           )
         ],
       ),
-      body: StreamBuilder<QuerySnapshot>(
+
+      // 🔁 Listen to /system/time so any manual time change triggers a rebuild
+      body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
-            .collection("bookings")
-            .where("roomId", isEqualTo: widget.roomId)
-            .where("date", isEqualTo: dateString)
+            .collection('system')
+            .doc('time')
             .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+        builder: (context, timeSnap) {
+          // Even if timeSnap is loading, we still show bookings; time is only for expiry.
+          return StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection("bookings")
+                .where("roomId", isEqualTo: widget.roomId)
+                .where("date", isEqualTo: dateString)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-          final reservedSlots = <int>{};
-          if (snapshot.hasData) {
-            for (var doc in snapshot.data!.docs) {
-              reservedSlots.add(doc["slot"] as int);
-            }
-          }
+              final reservedSlots = <int>{};
+              if (snapshot.hasData) {
+                final docs = snapshot.data!.docs;
 
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: _slots.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final slot = _slots[index];
-              final int slotNumber = slot["slot"];
-              final bool isReserved = reservedSlots.contains(slotNumber);
+                // 🔁 Auto-expire each booking of this room based on /system/time
+                for (final d in docs) {
+                  _autoExpireBookingForDoc(d);
+                }
 
-              return GestureDetector(
-                onTap: isReserved
-                    ? null
-                    : () async {
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            title: const Text("Confirm Booking"),
-                            content: Text(
-                                "Reserve ${slot["start"]} - ${slot["end"]}?"),
-                            actions: [
-                              TextButton(
-                                onPressed: () =>
-                                    Navigator.pop(context, false),
-                                child: const Text("Cancel"),
+                for (var doc in docs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final status = (data["status"] ?? "upcoming").toString();
+
+                  // ✅ Do NOT block the slot if this booking already expired
+                  if (status == "expired") continue;
+
+                  reservedSlots.add(data["slot"] as int);
+                }
+              }
+
+              return ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: _slots.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (context, index) {
+                  final slot = _slots[index];
+                  final int slotNumber = slot["slot"];
+                  final bool isReserved = reservedSlots.contains(slotNumber);
+
+                  return GestureDetector(
+                    onTap: isReserved
+                        ? null
+                        : () async {
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (_) => AlertDialog(
+                                title: const Text("Confirm Booking"),
+                                content: Text(
+                                    "Reserve ${slot["start"]} - ${slot["end"]}?"),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text("Cancel"),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text("Confirm"),
+                                  ),
+                                ],
                               ),
-                              TextButton(
-                                onPressed: () =>
-                                    Navigator.pop(context, true),
-                                child: const Text("Confirm"),
-                              ),
-                            ],
-                          ),
-                        );
+                            );
 
-                        if (confirm == true) {
-                          await _createBooking(
-                            slot: slotNumber,
-                            start: slot["start"],
-                            end: slot["end"],
-                            date: dateString,
-                          );
-                        }
-                      },
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: isReserved
-                        ? Colors.red.shade100
-                        : Colors.green.shade100,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: isReserved ? Colors.red : Colors.green,
-                      width: 2,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isReserved ? Icons.lock : Icons.lock_open,
-                        color: isReserved ? Colors.red : Colors.green,
-                        size: 28,
-                      ),
-                      const SizedBox(width: 16),
-                      Text(
-                        "${slot["start"]} - ${slot["end"]}",
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        isReserved ? "Reserved" : "Available",
-                        style: TextStyle(
-                          fontSize: 18,
+                            if (confirm == true) {
+                              await _createBooking(
+                                slot: slotNumber,
+                                start: slot["start"],
+                                end: slot["end"],
+                                date: dateString,
+                              );
+                            }
+                          },
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isReserved
+                            ? Colors.red.shade100
+                            : Colors.green.shade100,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
                           color: isReserved ? Colors.red : Colors.green,
-                          fontWeight: FontWeight.bold,
+                          width: 2,
                         ),
                       ),
-                    ],
-                  ),
-                ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isReserved ? Icons.lock : Icons.lock_open,
+                            color: isReserved ? Colors.red : Colors.green,
+                            size: 28,
+                          ),
+                          const SizedBox(width: 16),
+                          Text(
+                            "${slot["start"]} - ${slot["end"]}",
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            isReserved ? "Reserved" : "Available",
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: isReserved ? Colors.red : Colors.green,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               );
             },
           );
         },
-     ),
-);
-}
+      ),
+    );
+  }
 }
