@@ -170,6 +170,7 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
         'status': 'expired',
         'isCheckedIn': false,
       });
+      setState(() {});
 
       final roomSnap = await FirebaseFirestore.instance
           .collection('rooms')
@@ -183,6 +184,7 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
             'status': 'free',
             'currentReservationId': FieldValue.delete(),
           });
+           setState(() {});
         }
       }
     }
@@ -243,19 +245,47 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final reservedSlots = <int>{};
+final reservedSlots = <int>{};
 
-              if (snapshot.hasData) {
-                final docs = snapshot.data!.docs;
-                for (final d in docs) _autoExpireBookingForDoc(d);
+if (snapshot.hasData) {
+  final docs = snapshot.data!.docs;
 
-                for (var doc in docs) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  if (data["status"] != "expired") {
-                    reservedSlots.add(data["slot"]);
-                  }
-                }
-              }
+  for (final doc in docs) {
+    final data = doc.data() as Map<String, dynamic>;
+
+    final String status = (data["status"] ?? "upcoming").toString();
+    final String? bookingDate = data["date"] as String?;
+    final int? startMinutes = data["startTime"] as int?;
+    final bool isCheckedIn = data["isCheckedIn"] == true;
+
+    bool expiredByTime = false;
+
+    // 🔥 If this is an upcoming booking for *today* and time passed the 10-min window,
+    // treat it as expired IMMEDIATELY in the UI.
+    if (status == "upcoming" &&
+        !isCheckedIn &&
+        systemDate != null &&
+        systemMinutes != null &&
+        bookingDate != null &&
+        bookingDate == dateString &&
+        startMinutes != null) {
+      final int windowStart =
+          (data["windowStartMinutes"] as int?) ?? startMinutes;
+
+      if (systemMinutes > windowStart + 10) {
+        expiredByTime = true;
+        // Fire-and-forget: update Firestore to 'expired' + free room
+        _autoExpireBookingForDoc(doc);
+      }
+    }
+
+    // Only block slot if it is NOT expired (by status or by time)
+    if (status != "expired" && !expiredByTime) {
+      reservedSlots.add(data["slot"] as int);
+    }
+  }
+}
+
 
               return ListView.separated(
                 padding: const EdgeInsets.all(16),
