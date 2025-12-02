@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 // import your pages
 import 'login_page.dart';
@@ -17,6 +18,76 @@ Future<void> main() async {
     // If you have firebase_options.dart uncomment:
     // options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // AUTO UPDATE ROOMS BASED ON SYSTEM TIME
+FirebaseFirestore.instance
+    .collection('system')
+    .doc('time')
+    .snapshots()
+    .listen((systemSnap) async {
+
+  if (!systemSnap.exists) return;
+
+  final date = systemSnap.data()?['date'];
+  final time = systemSnap.data()?['currentTime'];
+
+  if (date == null || time == null) return;
+
+  // convert HH:mm → minutes
+  final parts = time.split(":");
+  if (parts.length != 2) return;
+
+  final int nowMin = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+
+  // get all rooms
+  final roomsSnap =
+      await FirebaseFirestore.instance.collection('rooms').get();
+
+  for (var roomDoc in roomsSnap.docs) {
+    final roomId = roomDoc.id;
+
+    // get bookings for this room on this date
+    final bookingsSnap = await FirebaseFirestore.instance
+        .collection('bookings')
+        .where("roomId", isEqualTo: roomId)
+        .where("date", isEqualTo: date)
+        .get();
+
+    String? activeId;
+
+    // pick ONLY booking that is active RIGHT NOW
+    for (var b in bookingsSnap.docs) {
+      final data = b.data();
+
+      final int start = data['startTime'];
+      final int end = data['endTime'];
+      final String status = data['status'];
+
+      final bool isActive =
+          status != "expired" &&
+          nowMin >= start &&
+          nowMin < end;
+
+      if (isActive) {
+        activeId = b.id;
+        break;
+      }
+    }
+
+    // update the room with the correct ID
+    if (activeId == null) {
+      await roomDoc.reference.update({
+        "currentReservationId": null,
+        "status": "free",
+      });
+    } else {
+      await roomDoc.reference.update({
+        "currentReservationId": activeId,
+        "status": "occupied",
+      });
+    }
+  }
+});
 
   runApp(const MyApp());
 }
