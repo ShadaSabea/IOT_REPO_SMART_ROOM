@@ -106,13 +106,6 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
 
     await docRef.update({"qrData": qrPayload});
 
-    await FirebaseFirestore.instance
-        .collection("rooms")
-        .doc(widget.roomId)
-        .update({
-      "status": "upcoming",
-      "currentReservationId": docRef.id,
-    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("Booking successful! Your PIN: $pin")),
@@ -170,12 +163,6 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
         'status': 'expired',
         'isCheckedIn': false,
       });
-      setState(() {});
-
-      final roomSnap = await FirebaseFirestore.instance
-          .collection('rooms')
-          .doc(widget.roomId)
-          .get();
 
     }
   }
