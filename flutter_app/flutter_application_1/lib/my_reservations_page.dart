@@ -101,7 +101,6 @@ class MyReservationsPage extends StatelessWidget {
 
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text("Check-in successful!")));
-
     } catch (e) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text("Error: $e")));
@@ -135,8 +134,7 @@ class MyReservationsPage extends StatelessWidget {
     final parts = systemTime.split(':');
     if (parts.length != 2) return;
 
-    final nowMinutes =
-        int.parse(parts[0]) * 60 + int.parse(parts[1]);
+    final nowMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
 
     const int checkInWindowMinutes = 10;
 
@@ -186,13 +184,117 @@ class MyReservationsPage extends StatelessWidget {
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // 🔵 NEW QR FAB WITH DROPDOWN ROOM PICKER
           FloatingActionButton(
             heroTag: "qr",
             backgroundColor: Colors.deepPurple,
             onPressed: () async {
-              final qrData = await Navigator.pushNamed(context, "/qrscanner");
-              if (qrData == null) return;
-              await _processQR(context, qrData.toString());
+              String? selectedRoomId;
+              String? tempSelectedValue; // used inside dropdown
+
+              try {
+                // 1) Load all rooms
+                final roomsSnap = await FirebaseFirestore.instance
+                    .collection('rooms')
+                    .get();
+
+                if (roomsSnap.docs.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("No rooms available.")),
+                  );
+                  return;
+                }
+
+                // Map of roomId -> roomName
+                final Map<String, String> roomMap = {};
+                for (var doc in roomsSnap.docs) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  roomMap[doc.id] =
+                      (data['name'] ?? 'Unknown room').toString();
+                }
+
+                // 2) Show dialog with DROPDOWN
+                selectedRoomId = await showDialog<String>(
+                  context: context,
+                  builder: (ctx) {
+                    return StatefulBuilder(
+                      builder: (ctx, setState) {
+                        return AlertDialog(
+                          title: const Text("Choose room to check-in"),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              DropdownButton<String>(
+                                isExpanded: true,
+                                value: tempSelectedValue,
+                                hint: const Text("Select a room"),
+                                items: roomMap.entries.map((entry) {
+                                  return DropdownMenuItem<String>(
+                                    value: entry.key, // roomId
+                                    child: Text(entry.value), // roomName only
+                                  );
+                                }).toList(),
+                                onChanged: (value) {
+                                  setState(() {
+                                    tempSelectedValue = value;
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx),
+                              child: const Text("Cancel"),
+                            ),
+                            TextButton(
+                              onPressed: tempSelectedValue == null
+                                  ? null
+                                  : () => Navigator.pop(ctx, tempSelectedValue),
+                              child: const Text("OK"),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                );
+
+                if (selectedRoomId == null) {
+                  return; // user cancelled
+                }
+
+                // 3) Mark on room: "someone is trying to scan"
+                await FirebaseFirestore.instance
+                    .collection('rooms')
+                    .doc(selectedRoomId)
+                    .update({
+                  'isTryingToScan': true,
+                });
+
+                // 4) Open scanner route
+                final qrData =
+                    await Navigator.pushNamed(context, "/qrscanner");
+
+                if (qrData == null) return;
+
+                // 5) Process QR like before
+                await _processQR(context, qrData.toString());
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("Error starting scan: $e")),
+                );
+              } finally {
+                // 6) Always reset isTryingToScan
+                if (selectedRoomId != null) {
+                  try {
+                    await FirebaseFirestore.instance
+                        .collection('rooms')
+                        .doc(selectedRoomId)
+                        .update({'isTryingToScan': false});
+                  } catch (_) {}
+                }
+              }
             },
             child: const Icon(Icons.qr_code_scanner,
                 size: 28, color: Colors.white),
@@ -220,12 +322,10 @@ class MyReservationsPage extends StatelessWidget {
             .doc("time")
             .snapshots(),
         builder: (context, timeSnap) {
-
           // once time arrives, rebuild normally
           return FutureBuilder<QuerySnapshot>(
             future: FirebaseFirestore.instance.collection('rooms').get(),
             builder: (context, roomsSnap) {
-
               if (roomsSnap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
@@ -245,7 +345,6 @@ class MyReservationsPage extends StatelessWidget {
                     .where("userId", isEqualTo: user.uid)
                     .snapshots(),
                 builder: (context, snapshot) {
-
                   if (!snapshot.hasData) {
                     return const Center(child: Text("No reservations."));
                   }
@@ -264,8 +363,7 @@ class MyReservationsPage extends StatelessWidget {
                   }
 
                   final now = DateTime.now();
-                  final today =
-                      DateTime(now.year, now.month, now.day);
+                  final today = DateTime(now.year, now.month, now.day);
 
                   final filtered = docs.where((doc) {
                     final data = doc.data() as Map<String, dynamic>;
@@ -278,8 +376,7 @@ class MyReservationsPage extends StatelessWidget {
 
                     try {
                       final d = DateTime.parse(dateStr);
-                      final onlyDate =
-                          DateTime(d.year, d.month, d.day);
+                      final onlyDate = DateTime(d.year, d.month, d.day);
                       return !onlyDate.isBefore(today);
                     } catch (_) {
                       return false;
@@ -295,10 +392,8 @@ class MyReservationsPage extends StatelessWidget {
                     final cmp = ad.compareTo(bd);
                     if (cmp != 0) return cmp;
 
-                    final aStart =
-                        (aData["startTime"] ?? 0) as int;
-                    final bStart =
-                        (bData["startTime"] ?? 0) as int;
+                    final aStart = (aData["startTime"] ?? 0) as int;
+                    final bStart = (bData["startTime"] ?? 0) as int;
                     return aStart.compareTo(bStart);
                   });
 
@@ -316,12 +411,15 @@ class MyReservationsPage extends StatelessWidget {
                       final data = doc.data() as Map<String, dynamic>;
 
                       final roomId = data["roomId"] ?? "";
-                      final roomName = roomNames[roomId] ?? "Unknown room";
+                      final roomName =
+                          roomNames[roomId] ?? "Unknown room";
 
                       final date = data["date"] ?? "";
                       final pin = data["pin"]?.toString() ?? "----";
-                      final startMinutes = (data["startTime"] ?? 0) as int;
-                      final endMinutes = (data["endTime"] ?? 0) as int;
+                      final startMinutes =
+                          (data["startTime"] ?? 0) as int;
+                      final endMinutes =
+                          (data["endTime"] ?? 0) as int;
                       final status =
                           (data["status"] ?? 'upcoming').toString();
 
