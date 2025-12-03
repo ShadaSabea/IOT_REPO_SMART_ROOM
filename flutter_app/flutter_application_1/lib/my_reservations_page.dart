@@ -81,7 +81,7 @@ class MyReservationsPage extends StatelessWidget {
       await bookingSnap.reference.update({
         "status": "checked-in",
         "isCheckedIn": true,
-      });+
+      });
 
       await FirebaseFirestore.instance
           .collection("rooms")

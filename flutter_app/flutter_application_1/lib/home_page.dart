@@ -47,7 +47,7 @@ class HomePage extends StatelessWidget {
                   final capacity = room['capacity'];
                   final location = room['location'];
                   final status = room['status'] ?? 'free';
-
+                  
                   // 🔁 Auto-expire room's reservation if no check-in within 10 minutes
                   _checkAndExpireRoom(room);
 
