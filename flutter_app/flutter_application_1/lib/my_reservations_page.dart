@@ -75,21 +75,13 @@ class MyReservationsPage extends StatelessWidget {
           "isCheckedIn": false,
         });
 
-        await FirebaseFirestore.instance
-            .collection("rooms")
-            .doc(roomId)
-            .update({
-          "status": "free",
-          "currentReservationId": FieldValue.delete(),
-        });
-
         throw Exception("Reservation expired.");
       }
 
       await bookingSnap.reference.update({
-        "status": "active",
+        "status": "checked-in",
         "isCheckedIn": true,
-      });
+      });+
 
       await FirebaseFirestore.instance
           .collection("rooms")
@@ -276,10 +268,10 @@ class MyReservationsPage extends StatelessWidget {
                 final qrData =
                     await Navigator.pushNamed(context, "/qrscanner");
 
-                if (qrData == null) return;
+              if (qrData == null) return;
 
                 // 5) Process QR like before
-                await _processQR(context, qrData.toString());
+              await _processQR(context, qrData.toString());
               } catch (e) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text("Error starting scan: $e")),
