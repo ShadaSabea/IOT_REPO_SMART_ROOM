@@ -54,19 +54,36 @@ Future<void> _recalculateRoomsForVirtualTime(
       final int windowStart =
           (data['windowStartMinutes'] ?? start) as int;
 
-      // 1) Decide if this booking should be expired now
-      final bool qrWindowPassed = nowMin > windowStart + 10;
-      final bool slotEnded = nowMin >= end;
+// 1) Decide if this booking should be expired now
+final bool qrWindowPassed = nowMin > windowStart + 10;
+final bool slotEnded = nowMin >= end;
 
-      final bool shouldExpire = qrWindowPassed || slotEnded;
+bool shouldExpire = false;
 
-      if (shouldExpire && bookingStatus != "expired") {
-        await b.reference.update({
-          "status": "expired",
-          "isCheckedIn": false,
-        });
-        bookingStatus = "expired";
-      }
+if (bookingStatus == "upcoming") {
+  // User did NOT check in yet
+  // → expire after 10min OR if the slot ended
+  shouldExpire = qrWindowPassed || slotEnded;
+
+} else if (bookingStatus == "checked-in") {
+  // User ALREADY checked in
+  // → DO NOT expire after 10 minutes
+  // → Only expire if the slot ended
+  shouldExpire = slotEnded;
+
+} else {
+  // expired / cancelled / anything else → do not expire again
+  shouldExpire = false;
+}
+
+if (shouldExpire && bookingStatus != "expired") {
+  await b.reference.update({
+    "status": "expired",
+    "isCheckedIn": false,
+  });
+  bookingStatus = "expired";
+}
+
 
       // 2) Only consider non-expired bookings whose time window includes now
       final bool insideSlot = nowMin >= start && nowMin < end;
