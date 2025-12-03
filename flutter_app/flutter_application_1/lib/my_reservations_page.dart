@@ -143,17 +143,6 @@ class MyReservationsPage extends StatelessWidget {
             .doc(roomId)
             .get();
 
-        if (roomSnap.exists) {
-          final roomData = roomSnap.data() as Map<String, dynamic>;
-          final String? currentRes =
-              roomData['currentReservationId'] as String?;
-          if (currentRes == bookingDoc.id) {
-            await roomSnap.reference.update({
-              'status': 'free',
-              'currentReservationId': FieldValue.delete(),
-            });
-          }
-        }
       }
     }
   }

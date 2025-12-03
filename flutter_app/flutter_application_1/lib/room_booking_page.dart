@@ -177,16 +177,6 @@ class _RoomBookingPageState extends State<RoomBookingPage> {
           .doc(widget.roomId)
           .get();
 
-      if (roomSnap.exists) {
-        final roomData = roomSnap.data() as Map<String, dynamic>;
-        if (roomData['currentReservationId'] == bookingDoc.id) {
-          await roomSnap.reference.update({
-            'status': 'free',
-           // 'currentReservationId': FieldValue.delete(),
-          });
-           setState(() {});
-        }
-      }
     }
   }
 
