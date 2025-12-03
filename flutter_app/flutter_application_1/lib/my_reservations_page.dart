@@ -93,11 +93,16 @@ class MyReservationsPage extends StatelessWidget {
 
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text("Check-in successful!")));
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Error: $e")));
+        } catch (e) {
+      // Clean the exception text so user doesn't see "Exception:"
+      final msg = e.toString().replaceFirst('Exception: ', '').trim();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
     }
   }
+
 
   Future<void> _autoExpireBooking(DocumentSnapshot bookingDoc) async {
     final data = bookingDoc.data() as Map<String, dynamic>;
