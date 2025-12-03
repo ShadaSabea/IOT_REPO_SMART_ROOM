@@ -20,74 +20,104 @@ Future<void> main() async {
   );
 
   // AUTO UPDATE ROOMS BASED ON SYSTEM TIME
-FirebaseFirestore.instance
-    .collection('system')
-    .doc('time')
-    .snapshots()
-    .listen((systemSnap) async {
+  FirebaseFirestore.instance
+      .collection('system')
+      .doc('time')
+      .snapshots()
+      .listen((systemSnap) async {
+    if (!systemSnap.exists) return;
 
-  if (!systemSnap.exists) return;
+    final date = systemSnap.data()?['date'];
+    final time = systemSnap.data()?['currentTime'];
 
-  final date = systemSnap.data()?['date'];
-  final time = systemSnap.data()?['currentTime'];
+    if (date == null || time == null) return;
 
-  if (date == null || time == null) return;
+    // convert HH:mm → minutes
+    final parts = time.split(":");
+    if (parts.length != 2) return;
 
-  // convert HH:mm → minutes
-  final parts = time.split(":");
-  if (parts.length != 2) return;
+    final int nowMin = int.parse(parts[0]) * 60 + int.parse(parts[1]);
 
-  final int nowMin = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+    // get all rooms
+    final roomsSnap =
+        await FirebaseFirestore.instance.collection('rooms').get();
 
-  // get all rooms
-  final roomsSnap =
-      await FirebaseFirestore.instance.collection('rooms').get();
+    for (var roomDoc in roomsSnap.docs) {
+      final roomId = roomDoc.id;
 
-  for (var roomDoc in roomsSnap.docs) {
-    final roomId = roomDoc.id;
+      // get bookings for this room on this date
+      final bookingsSnap = await FirebaseFirestore.instance
+          .collection('bookings')
+          .where("roomId", isEqualTo: roomId)
+          .where("date", isEqualTo: date)
+          .get();
 
-    // get bookings for this room on this date
-    final bookingsSnap = await FirebaseFirestore.instance
-        .collection('bookings')
-        .where("roomId", isEqualTo: roomId)
-        .where("date", isEqualTo: date)
-        .get();
+      String? activeId;
+      String roomStatus = "free"; // will follow booking status if we find one
 
-    String? activeId;
+      // pick ONLY booking that is active RIGHT NOW
+      for (var b in bookingsSnap.docs) {
+        final data = b.data();
 
-    // pick ONLY booking that is active RIGHT NOW
-    for (var b in bookingsSnap.docs) {
-      final data = b.data();
+        final int start = data['startTime'] as int;
+        final int end = data['endTime'] as int;
+        String bookingStatus =
+            (data['status'] ?? 'upcoming').toString();
 
-      final int start = data['startTime'];
-      final int end = data['endTime'];
-      final String status = data['status'];
+        // windowStartMinutes is used for the 10-minute QR window.
+        // If it doesn't exist, fall back to start time.
+        final int windowStart =
+            (data['windowStartMinutes'] ?? start) as int;
 
-      final bool isActive =
-          status != "expired" &&
-          nowMin >= start &&
-          nowMin < end;
+        // 1) Decide if this booking should be expired now
+        final bool qrWindowPassed = nowMin > windowStart + 10;
+        final bool slotEnded = nowMin >= end;
 
-      if (isActive) {
+        final bool shouldExpire = qrWindowPassed || slotEnded;
+
+        if (shouldExpire && bookingStatus != "expired") {
+          await b.reference.update({
+            "status": "expired",
+            "isCheckedIn": false,
+          });
+          bookingStatus = "expired";
+        }
+
+        // 2) Only consider non-expired bookings whose time window includes now
+        final bool insideSlot = nowMin >= start && nowMin < end;
+        if (!insideSlot) continue;
+        if (bookingStatus == "expired") continue;
+
+        // This booking is relevant "right now"
         activeId = b.id;
+
+        // Room status according to booking status
+        if (bookingStatus == "checked-in") {
+          roomStatus = "occupied";
+        } else if (bookingStatus == "upcoming") {
+          roomStatus = "upcoming";
+        } else {
+          roomStatus = "free";
+        }
+
+        // We found the booking for this time; no need to check others
         break;
       }
-    }
 
-    // update the room with the correct ID
-    if (activeId == null) {
-      await roomDoc.reference.update({
-        "currentReservationId": null,
-        "status": "free",
-      });
-    } else {
-      await roomDoc.reference.update({
-        "currentReservationId": activeId,
-        "status": "occupied",
-      });
+      // update the room with the correct ID + status
+      if (activeId == null) {
+        await roomDoc.reference.update({
+          "currentReservationId": null,
+          "status": "free",
+        });
+      } else {
+        await roomDoc.reference.update({
+          "currentReservationId": activeId,
+          "status": roomStatus, // derived from booking status
+        });
+      }
     }
-  }
-});
+  });
 
   runApp(const MyApp());
 }
@@ -174,7 +204,7 @@ class WelcomeScreen extends StatelessWidget {
             ],
           ),
         ),
-     ),
-);
-}
+      ),
+    );
+  }
 }
